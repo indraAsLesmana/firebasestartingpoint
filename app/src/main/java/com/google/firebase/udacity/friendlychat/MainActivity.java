@@ -30,7 +30,6 @@ import android.widget.EditText;
 import android.widget.ImageButton;
 import android.widget.ListView;
 import android.widget.ProgressBar;
-import android.widget.Toast;
 
 import com.firebase.ui.auth.AuthUI;
 import com.google.firebase.auth.FirebaseAuth;
@@ -142,16 +141,17 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        //listen current user
         mAuthListener = new FirebaseAuth.AuthStateListener() {
             @Override
             public void onAuthStateChanged(@NonNull FirebaseAuth firebaseAuth) {
                 FirebaseUser user = firebaseAuth.getCurrentUser();
                 if (user != null) {
                     //user is login
-                    Toast.makeText(MainActivity.this, "Welcome to this apps", Toast.LENGTH_SHORT).show();
+                    onSignInInitialize(user);
                 } else {
                     //user not login
+                    onSignOutCleanUp();
+                    //force to sign in page
                     startActivityForResult(AuthUI.getInstance().createSignInIntentBuilder()
                             .setProviders(Arrays.asList(
                                     new AuthUI.IdpConfig.Builder(AuthUI.EMAIL_PROVIDER).build(),
@@ -162,26 +162,51 @@ public class MainActivity extends AppCompatActivity {
             }
         };
 
-        childEventListener = new ChildEventListener() {
-            @Override
-            public void onChildAdded(DataSnapshot dataSnapshot, String s) {
-                FriendlyMessage friendlyMessage = dataSnapshot.getValue(FriendlyMessage.class);
-                mMessageAdapter.add(friendlyMessage);
-            }
+    }
 
-            @Override
-            public void onChildChanged(DataSnapshot dataSnapshot, String s) {}
+    private void onSignOutCleanUp() {
+        mUsername = ANONYMOUS;
+        mMessageAdapter.clear();
+        onDetachDatabaseListener();
+    }
 
-            @Override
-            public void onChildRemoved(DataSnapshot dataSnapshot) {}
+    private void onDetachDatabaseListener() {
+        if (childEventListener != null){
+            mMessageDatabaseReference.removeEventListener(childEventListener);
+            childEventListener = null;
+        }
+    }
 
-            @Override
-            public void onChildMoved(DataSnapshot dataSnapshot, String s) {}
+    private void onSignInInitialize(FirebaseUser currentUser) {
+        mUsername = currentUser.getDisplayName();
+        onAttachDatabaseListener();
 
-            @Override
-            public void onCancelled(DatabaseError databaseError) {}
-        };
-        mMessageDatabaseReference.addChildEventListener(childEventListener);
+    }
+
+    private void onAttachDatabaseListener() {
+        //listen current user
+        if (childEventListener == null){
+            childEventListener = new ChildEventListener() {
+                @Override
+                public void onChildAdded(DataSnapshot dataSnapshot, String s) {
+                    FriendlyMessage friendlyMessage = dataSnapshot.getValue(FriendlyMessage.class);
+                    mMessageAdapter.add(friendlyMessage);
+                }
+
+                @Override
+                public void onChildChanged(DataSnapshot dataSnapshot, String s) {}
+
+                @Override
+                public void onChildRemoved(DataSnapshot dataSnapshot) {}
+
+                @Override
+                public void onChildMoved(DataSnapshot dataSnapshot, String s) {}
+
+                @Override
+                public void onCancelled(DatabaseError databaseError) {}
+            };
+            mMessageDatabaseReference.addChildEventListener(childEventListener);
+        }
     }
 
     @Override
@@ -199,7 +224,11 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onPause() {
         super.onPause();
-        mFirebaseAuth.removeAuthStateListener(mAuthListener);
+        if (childEventListener != null){
+            mFirebaseAuth.removeAuthStateListener(mAuthListener);
+        }
+        onDetachDatabaseListener();
+        mMessageAdapter.clear();
     }
 
     @Override
