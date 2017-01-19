@@ -15,11 +15,14 @@
  */
 package com.google.firebase.udacity.friendlychat;
 
+import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
 import android.support.annotation.NonNull;
 import android.support.v7.app.AppCompatActivity;
 import android.text.Editable;
 import android.text.InputFilter;
+import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.view.Menu;
 import android.view.MenuInflater;
@@ -30,8 +33,11 @@ import android.widget.EditText;
 import android.widget.ImageButton;
 import android.widget.ListView;
 import android.widget.ProgressBar;
+import android.widget.Toast;
 
 import com.firebase.ui.auth.AuthUI;
+import com.firebase.ui.auth.IdpResponse;
+import com.google.android.gms.tasks.OnSuccessListener;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.database.ChildEventListener;
@@ -39,6 +45,9 @@ import com.google.firebase.database.DataSnapshot;
 import com.google.firebase.database.DatabaseError;
 import com.google.firebase.database.DatabaseReference;
 import com.google.firebase.database.FirebaseDatabase;
+import com.google.firebase.storage.FirebaseStorage;
+import com.google.firebase.storage.StorageReference;
+import com.google.firebase.storage.UploadTask;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -63,10 +72,13 @@ public class MainActivity extends AppCompatActivity {
     private FirebaseDatabase mFirebaseDatabase;
     private DatabaseReference mMessageDatabaseReference;
     private ChildEventListener childEventListener;
+    private FirebaseStorage mFirebaseStorage;
+    private StorageReference mChatPhotoStorageReference;
 
     private FirebaseAuth mFirebaseAuth;
-    private FirebaseAuth.AuthStateListener mAuthListener;
-    private static final int RC_SIGN_IN = 1;
+    private FirebaseAuth.AuthStateListener mAuthStateListener;
+    private static final int RC_SIGN_IN = 1001;
+    private static final int RC_PHOTO_PICKER = 2001;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -82,10 +94,13 @@ public class MainActivity extends AppCompatActivity {
         mMessageEditText = (EditText) findViewById(R.id.messageEditText);
         mSendButton = (Button) findViewById(R.id.sendButton);
 
+        //getInstace from firebase
         mFirebaseDatabase = FirebaseDatabase.getInstance();
         mFirebaseAuth = FirebaseAuth.getInstance();
+        mFirebaseStorage = FirebaseStorage.getInstance();
 
         mMessageDatabaseReference = mFirebaseDatabase.getReference().child("messsages");
+        mChatPhotoStorageReference = mFirebaseStorage.getReference().child("chat_photos");
 
         // Initialize message ListView and its adapter
         List<FriendlyMessage> friendlyMessages = new ArrayList<>();
@@ -141,7 +156,18 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        mAuthListener = new FirebaseAuth.AuthStateListener() {
+        // ImagePickerButton shows an image picker to upload a image for a message
+        mPhotoPickerButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+                intent.setType("image/jpeg");
+                intent.putExtra(Intent.EXTRA_LOCAL_ONLY, true);
+                startActivityForResult(Intent.createChooser(intent, "Complete action using"), RC_PHOTO_PICKER);
+            }
+        });
+
+        mAuthStateListener = new FirebaseAuth.AuthStateListener() {
             @Override
             public void onAuthStateChanged(@NonNull FirebaseAuth firebaseAuth) {
                 FirebaseUser user = firebaseAuth.getCurrentUser();
@@ -152,15 +178,53 @@ public class MainActivity extends AppCompatActivity {
                     //user not login
                     onSignOutCleanUp();
                     //force to sign in page
-                    startActivityForResult(AuthUI.getInstance().createSignInIntentBuilder()
-                            .setProviders(Arrays.asList(
-                                    new AuthUI.IdpConfig.Builder(AuthUI.EMAIL_PROVIDER).build(),
-                                    new AuthUI.IdpConfig.Builder(AuthUI.GOOGLE_PROVIDER).build()))
-                            .setIsSmartLockEnabled(false)
-                            .build(), RC_SIGN_IN);
+                    forceLoginCheck();
                 }
             }
         };
+
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == RC_SIGN_IN) {
+            IdpResponse response = IdpResponse.fromResultIntent(data);
+
+            switch (resultCode) {
+                case RESULT_OK:
+                    Toast.makeText(this, "You're sign in", Toast.LENGTH_SHORT).show();
+                    return;
+                case RESULT_CANCELED:
+                    Toast.makeText(this, "You're cancel sign in", Toast.LENGTH_SHORT).show();
+                    finish();
+                    return;
+                default:
+                    if (response == null) {
+                        finish();
+                    }
+            }
+        }
+
+        if (requestCode == RC_PHOTO_PICKER){
+            if (resultCode == RESULT_OK){
+                Uri selectedImageUri = data.getData();
+                StorageReference photoRef =
+                        mChatPhotoStorageReference.child(selectedImageUri.getLastPathSegment());
+
+                photoRef.putFile(selectedImageUri).addOnSuccessListener(this,
+                        new OnSuccessListener<UploadTask.TaskSnapshot>() {
+                            @Override
+                            public void onSuccess(UploadTask.TaskSnapshot taskSnapshot) {
+                                Uri downloadurl = taskSnapshot.getDownloadUrl();
+                                FriendlyMessage friendlyMessage =
+                                        new FriendlyMessage(null, mUsername, downloadurl.toString());
+                                mMessageDatabaseReference.push().setValue(friendlyMessage);
+                            }
+                        });
+
+            }
+        }
 
     }
 
@@ -178,7 +242,12 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void onSignInInitialize(FirebaseUser currentUser) {
-        mUsername = currentUser.getDisplayName();
+        String username = currentUser.getDisplayName();
+        if (TextUtils.isEmpty(username)){
+            mUsername = ANONYMOUS;
+        }else {
+            mUsername = username;
+        }
         onAttachDatabaseListener();
 
     }
@@ -218,14 +287,30 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
+        switch (item.getItemId()){
+            case R.id.sign_out_menu:
+                onSignOutCleanUp();
+                AuthUI.getInstance().signOut(this);
+                return true;
+        }
         return super.onOptionsItemSelected(item);
+    }
+
+    private void forceLoginCheck() {
+        onSignOutCleanUp();
+        startActivityForResult(AuthUI.getInstance().createSignInIntentBuilder()
+                .setProviders(Arrays.asList(
+                        new AuthUI.IdpConfig.Builder(AuthUI.EMAIL_PROVIDER).build(),
+                        new AuthUI.IdpConfig.Builder(AuthUI.GOOGLE_PROVIDER).build()))
+                .setIsSmartLockEnabled(false)
+                .build(), RC_SIGN_IN);
     }
 
     @Override
     protected void onPause() {
         super.onPause();
         if (childEventListener != null){
-            mFirebaseAuth.removeAuthStateListener(mAuthListener);
+            mFirebaseAuth.removeAuthStateListener(mAuthStateListener);
         }
         onDetachDatabaseListener();
         mMessageAdapter.clear();
@@ -234,6 +319,6 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
-        mFirebaseAuth.addAuthStateListener(mAuthListener);
+        mFirebaseAuth.addAuthStateListener(mAuthStateListener);
     }
 }
