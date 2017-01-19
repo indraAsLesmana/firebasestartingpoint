@@ -49,20 +49,24 @@ import com.google.firebase.database.DataSnapshot;
 import com.google.firebase.database.DatabaseError;
 import com.google.firebase.database.DatabaseReference;
 import com.google.firebase.database.FirebaseDatabase;
+import com.google.firebase.remoteconfig.FirebaseRemoteConfig;
+import com.google.firebase.remoteconfig.FirebaseRemoteConfigSettings;
 import com.google.firebase.storage.FirebaseStorage;
 import com.google.firebase.storage.StorageReference;
 import com.google.firebase.storage.UploadTask;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "MainActivity";
 
     public static final String ANONYMOUS = "anonymous";
-    public static final int DEFAULT_MSG_LENGTH_LIMIT = 1000;
+    public static final int DEFAULT_MSG_LENGTH_LIMIT = 200;
 
     private ListView mMessageListView;
     private MessageAdapter mMessageAdapter;
@@ -78,11 +82,13 @@ public class MainActivity extends AppCompatActivity {
     private ChildEventListener childEventListener;
     private FirebaseStorage mFirebaseStorage;
     private StorageReference mChatPhotoStorageReference;
+    private FirebaseRemoteConfig mFirebaseRemoteConfig;
 
     private FirebaseAuth mFirebaseAuth;
     private FirebaseAuth.AuthStateListener mAuthStateListener;
     private static final int RC_SIGN_IN = 1001;
     private static final int RC_PHOTO_PICKER = 2001;
+    private static final String FRIENDLY_MSG_LENGTH_KEY = "friendly_msg_length";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -105,6 +111,7 @@ public class MainActivity extends AppCompatActivity {
 
         mMessageDatabaseReference = mFirebaseDatabase.getReference().child("messsages");
         mChatPhotoStorageReference = mFirebaseStorage.getReference().child("chat_photos");
+        mFirebaseRemoteConfig = FirebaseRemoteConfig.getInstance();
 
         // Initialize message ListView and its adapter
         List<FriendlyMessage> friendlyMessages = new ArrayList<>();
@@ -187,14 +194,52 @@ public class MainActivity extends AppCompatActivity {
             }
         };
 
+        FirebaseRemoteConfigSettings configSettings = new FirebaseRemoteConfigSettings.Builder()
+                .setDeveloperModeEnabled(BuildConfig.DEBUG)
+                .build();
+        mFirebaseRemoteConfig.setConfigSettings(configSettings);
+
+        Map<String, Object> defaultConfigMap = new HashMap<>();
+        defaultConfigMap.put(FRIENDLY_MSG_LENGTH_KEY, DEFAULT_MSG_LENGTH_LIMIT);
+        mFirebaseRemoteConfig.setDefaults(defaultConfigMap); // setup default value before fecth new value from server
+        fetchConfig();
+
+    }
+
+    private void fetchConfig() {
+        long cacheExpiration = 3600;
+
+        if (mFirebaseRemoteConfig.getInfo().getConfigSettings().isDeveloperModeEnabled()) {
+            cacheExpiration = 0;
+        }
+
+        mFirebaseRemoteConfig.fetch(cacheExpiration)
+                .addOnSuccessListener(new OnSuccessListener<Void>() {
+                    @Override
+                    public void onSuccess(Void aVoid) {
+                        mFirebaseRemoteConfig.activateFetched();
+                        ApplyRetrieveLegthLimit();
+                    }
+                })
+                .addOnFailureListener(new OnFailureListener() {
+                    @Override
+                    public void onFailure(@NonNull Exception e) {
+                        ApplyRetrieveLegthLimit();
+                    }
+                });
+
+    }
+
+    private void ApplyRetrieveLegthLimit() {
+        long friendly_msg_length = mFirebaseRemoteConfig.getLong(FRIENDLY_MSG_LENGTH_KEY);
+        mMessageEditText.setFilters(new InputFilter[]{new InputFilter.LengthFilter(Integer.parseInt(String.valueOf(friendly_msg_length)))});
+        Log.d(TAG, FRIENDLY_MSG_LENGTH_KEY + " = " + friendly_msg_length);
     }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == RC_SIGN_IN) {
-            IdpResponse response = IdpResponse.fromResultIntent(data);
-
             switch (resultCode) {
                 case RESULT_OK:
                     Toast.makeText(this, "You're sign in", Toast.LENGTH_SHORT).show();
@@ -203,10 +248,6 @@ public class MainActivity extends AppCompatActivity {
                     Toast.makeText(this, "You're cancel sign in", Toast.LENGTH_SHORT).show();
                     finish();
                     return;
-                default:
-                    if (response == null) {
-                        finish();
-                    }
             }
         }
 
