@@ -24,6 +24,7 @@ import android.text.Editable;
 import android.text.InputFilter;
 import android.text.TextUtils;
 import android.text.TextWatcher;
+import android.util.Log;
 import android.view.Menu;
 import android.view.MenuInflater;
 import android.view.MenuItem;
@@ -37,7 +38,10 @@ import android.widget.Toast;
 
 import com.firebase.ui.auth.AuthUI;
 import com.firebase.ui.auth.IdpResponse;
+import com.google.android.gms.tasks.OnCompleteListener;
+import com.google.android.gms.tasks.OnFailureListener;
 import com.google.android.gms.tasks.OnSuccessListener;
+import com.google.android.gms.tasks.Task;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.database.ChildEventListener;
@@ -212,7 +216,9 @@ public class MainActivity extends AppCompatActivity {
                 StorageReference photoRef =
                         mChatPhotoStorageReference.child(selectedImageUri.getLastPathSegment());
 
-                photoRef.putFile(selectedImageUri).addOnSuccessListener(this,
+                UploadTask result = photoRef.putFile(selectedImageUri);
+
+                result.addOnSuccessListener(this,
                         new OnSuccessListener<UploadTask.TaskSnapshot>() {
                             @Override
                             public void onSuccess(UploadTask.TaskSnapshot taskSnapshot) {
@@ -221,8 +227,14 @@ public class MainActivity extends AppCompatActivity {
                                         new FriendlyMessage(null, mUsername, downloadurl.toString());
                                 mMessageDatabaseReference.push().setValue(friendlyMessage);
                             }
-                        });
-
+                        }).addOnFailureListener(this,
+                        new OnFailureListener() {
+                    @Override
+                    public void onFailure(@NonNull Exception e) {
+                        Toast.makeText(MainActivity.this, "Error:" + e.getMessage(), Toast.LENGTH_SHORT).show();
+                        e.printStackTrace();
+                    }
+                });
             }
         }
 
